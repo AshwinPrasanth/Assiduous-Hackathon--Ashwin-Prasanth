@@ -1,0 +1,71 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=DM+Sans:wght@300;400;500&family=JetBrains+Mono:wght@400;500&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-display: 'Playfair Display';
+  --font-body: 'DM Sans';
+  --font-mono: 'JetBrains Mono';
+
+  --ink: #0A0A0F;
+  --paper: #F5F3EE;
+  --accent: #C8A951;
+  --accent-dim: #8B7235;
+  --dim: #3A3A4A;
+  --muted: #8888A0;
+  --positive: #2ECC71;
+  --negative: #E74C3C;
+  --border: rgba(10, 10, 15, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  background: var(--ink);
+}
+
+body {
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--font-body), sans-serif;
+  font-weight: 300;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--ink); }
+::-webkit-scrollbar-thumb { background: var(--dim); border-radius: 3px; }
+
+/* Selection */
+::selection { background: var(--accent); color: var(--ink); }
+
+/* Ticker input */
+input[type="text"] {
+  background: transparent;
+  outline: none;
+  border: none;
+}
+
+/* Number formatting */
+.tabular { font-variant-numeric: tabular-nums; }
+
+/* Animate in */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-slow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.animate-fade-up { animation: fadeUp 0.5s ease forwards; }
+.animate-pulse-slow { animation: pulse-slow 2s ease-in-out infinite; }
