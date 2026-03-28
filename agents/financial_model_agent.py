@@ -13,11 +13,12 @@ Design:
 """
 
 from __future__ import annotations
-
+from dotenv import load_dotenv
 import math
 
-import anthropic
+from openai import OpenAI
 import structlog
+import os
 
 from models.financial import (
     DCFValuation,
@@ -29,9 +30,15 @@ from models.financial import (
 )
 
 logger = structlog.get_logger(__name__)
+load_dotenv()
+# --- YOUR REQUESTED GROQ CONFIG ---
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY") or "gsk_YOUR_ACTUAL_KEY_HERE"
 
-client = anthropic.Anthropic()
-
+LLM_CLIENT = OpenAI(
+    api_key=GROQ_API_KEY,
+    base_url="https://api.groq.com/openai/v1",
+)
+LLM_MODEL = "llama-3.3-70b-versatile"
 
 # ---------------------------------------------------------------------------
 # LLM: derive scenario assumptions from historical data
@@ -91,20 +98,24 @@ Rules:
 
 
 def _get_llm_assumptions(financials: NormalisedFinancials) -> dict:
-    """Call Claude to derive scenario assumptions. Returns parsed JSON."""
+    """Call Groq to derive scenario assumptions. Returns parsed JSON."""
     import json
 
     prompt = _build_assumptions_prompt(financials)
     logger.info("llm_assumptions_request", ticker=financials.ticker)
 
-    message = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=800,
+    # UPDATED: Using your LLM_CLIENT and LLM_MODEL
+    response = LLM_CLIENT.chat.completions.create(
+        model=LLM_MODEL,
         messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_object"}, # Forces valid JSON
+        temperature=0.1
     )
-    raw = message.content[0].text.strip()
+    
+    # UPDATED: Accessing content via OpenAI-style response object
+    raw = response.choices[0].message.content.strip()
 
-    # Strip any accidental markdown fences
+    # The rest of your JSON parsing logic
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
@@ -113,7 +124,6 @@ def _get_llm_assumptions(financials: NormalisedFinancials) -> dict:
     assumptions = json.loads(raw.strip())
     logger.info("llm_assumptions_received", ticker=financials.ticker, scenarios=list(assumptions.keys()))
     return assumptions
-
 
 # ---------------------------------------------------------------------------
 # DCF maths — fully deterministic
