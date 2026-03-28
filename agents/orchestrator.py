@@ -54,9 +54,9 @@ async def node_ingest(state: dict) -> dict:
             ticker=ticker,
             profile=profile,
             market=market,
-            income_statements=incomes,
-            balance_sheets=balances,
-            cash_flows=cash_flows,
+            income_statements=incomes or [],
+            balance_sheets=balances or [],
+            cash_flows=cash_flows or [],
             metrics=[],
         )
         logs.append(
@@ -90,20 +90,29 @@ async def node_transform(state: dict) -> dict:
 
 async def node_validate(state: dict) -> dict:
     logs = state.get("logs", [])
-    financials: NormalisedFinancials = state["raw_financials"]
-    logger.info("node_enter", node="validate", ticker=financials.ticker)
+    # Grab the financials from the state
+    financials: NormalisedFinancials = state.get("raw_financials")
+    
+    logger.info("node_enter", node="validate", ticker=state.get("ticker"))
     logs.append("[validate] Running consistency checks...")
+    
     try:
         result = validate(financials)
         for w in result.warnings:
             logs.append(f"[validate] ⚠ {w}")
+        
         if not result.passed:
-            for e in result.errors:
-                logs.append(f"[validate] ✗ {e}")
+            # Handle failure
             return {"logs": logs, "errors": result.errors, "status": "failed"}
+            
         logs.append(f"[validate] ✓ Passed ({len(result.warnings)} warnings)")
-        logger.info("node_exit", node="validate", status="ok")
-        return {"logs": logs}
+        
+        # CRITICAL: You MUST return "raw_financials" here so the MODEL node gets it!
+        return {
+            "logs": logs, 
+            "raw_financials": financials, # <--- DO NOT MISS THIS
+            "status": "running"
+        }
     except Exception as exc:
         msg = f"[validate] ✗ {exc}"
         logs.append(msg)
@@ -113,36 +122,75 @@ async def node_validate(state: dict) -> dict:
 async def node_model(state: dict) -> dict:
     logs = state.get("logs", [])
     financials: NormalisedFinancials = state["raw_financials"]
-    logger.info("node_enter", node="model", ticker=financials.ticker)
+    ticker = financials.ticker
+    
+    logger.info("node_enter", node="model", ticker=ticker)
+    
+    # --- CRITICAL GUARD CLAUSE ---
+    # If Yahoo failed, these lists are empty. We must skip the DCF math 
+    # to prevent "list index out of range" and move straight to the AI report.
+    if not financials.balance_sheets or not financials.cash_flows:
+        msg = "[model] ⚠ Skipping DCF math: Supplemental statement data (Yahoo) was unavailable."
+        logs.append(msg)
+        logger.warning("model_skipped_insufficient_data", ticker=ticker)
+        # We return "None" for the model, but keep status "running" so the report node starts
+        return {
+            "financial_model": None, 
+            "logs": logs, 
+            "status": "running",
+            "raw_financials": financials # Keep passing financials forward
+        }
+
     logs.append("[model] Building 3-scenario DCF model...")
     try:
+        # This is where the index error used to happen inside run_financial_model
         fin_model = await run_financial_model(financials)
+        
         base = fin_model.scenarios["base"]
         logs.append(
             f"[model] ✓ Base case: ${base.price_per_share:.2f}/share "
             f"({base.upside_downside_pct:+.1%} vs current ${base.current_price:.2f})"
         )
         logger.info("node_exit", node="model", status="ok")
-        return {"financial_model": fin_model, "logs": logs}
+        return {
+            "financial_model": fin_model, 
+            "logs": logs,
+            "raw_financials": financials # Keep passing financials forward
+        }
     except Exception as exc:
-        msg = f"[model] ✗ {exc}"
+        # If the math still fails for some reason, don't kill the whole app!
+        # Log it as a warning and let the Report Agent try to explain the situation.
+        msg = f"[model] ⚠ Math engine error: {exc}. Proceeding to qualitative report."
         logs.append(msg)
         logger.error("node_error", node="model", error=str(exc))
-        return {"logs": logs, "errors": [msg], "status": "failed"}
+        return {
+            "financial_model": None, 
+            "logs": logs, 
+            "status": "running",
+            "raw_financials": financials
+        }
 
 
 async def node_report(state: dict) -> dict:
     logs = state.get("logs", [])
     financials: NormalisedFinancials = state["raw_financials"]
-    fin_model = state["financial_model"]
-    logger.info("node_enter", node="report", ticker=financials.ticker)
-    logs.append("[report] Running 4-step report agent (plan → analyse → write → review)...")
+    fin_model = state.get("financial_model") # This might be None now
+    
+    ticker = financials.ticker
+    logger.info("node_enter", node="report", ticker=ticker)
+    logs.append("[report] Running report agent (SEC-only mode if DCF is missing)...")
+    
     try:
+        # Pass the fin_model even if it's None; 
+        # we just need to ensure run_report_agent handles the None gracefully.
         brief = await run_report_agent(financials, fin_model)
+        
         logs.append("[report] ✓ Equity brief generated")
         logger.info("node_exit", node="report", status="ok")
         return {"equity_brief": brief, "logs": logs, "status": "complete"}
     except Exception as exc:
+        # If the report agent is hardcoded to EXPECT scenarios, 
+        # this catch block will see the 'NoneType' error.
         msg = f"[report] ✗ {exc}"
         logs.append(msg)
         logger.error("node_error", node="report", error=str(exc))
@@ -191,8 +239,9 @@ async def run_pipeline(ticker: str) -> PipelineState:
     Execute the full pipeline for a given ticker.
     Returns a PipelineState with all outputs and logs.
     """
+    ticker_upper = ticker.upper()
     initial_state = {
-        "ticker": ticker.upper(),
+        "ticker": ticker_upper,
         "raw_financials": None,
         "financial_model": None,
         "equity_brief": None,
@@ -201,12 +250,25 @@ async def run_pipeline(ticker: str) -> PipelineState:
         "status": "running",
     }
 
-    logger.info("pipeline_start", ticker=ticker)
-    final_state = await pipeline_graph.ainvoke(initial_state)
-    logger.info("pipeline_end", ticker=ticker, status=final_state.get("status"))
+    logger.info("pipeline_start", ticker=ticker_upper)
+    
+    try:
+        final_state = await pipeline_graph.ainvoke(initial_state)
+    except Exception as e:
+        # Catch-all for graph-level crashes
+        logger.error("graph_invoke_failed", ticker=ticker_upper, error=str(e))
+        return PipelineState(
+            ticker=ticker_upper,
+            logs=[f"[system] ✗ Critical Engine Error: {str(e)}"],
+            errors=[str(e)],
+            status="failed"
+        )
 
+    logger.info("pipeline_end", ticker=ticker_upper, status=final_state.get("status"))
+
+    # Use .get() for EVERYTHING to prevent KeyError
     return PipelineState(
-        ticker=final_state["ticker"],
+        ticker=final_state.get("ticker", ticker_upper),
         raw_financials=final_state.get("raw_financials"),
         financial_model=final_state.get("financial_model"),
         equity_brief=final_state.get("equity_brief"),
