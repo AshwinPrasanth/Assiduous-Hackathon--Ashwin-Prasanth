@@ -4,7 +4,7 @@
 
 **Built for the Assiduous Hackathon · March 2026**
 
-[![Demo Video](https://img.shields.io/badge/Demo-Watch%203min%20walkthrough-green)](./demo.md)
+[![Demo Video](https://img.shields.io/badge/Demo-Watch%203min%20walkthrough-green)](https://youtu.be/HWU2KgGj3xs?si=U6qgRIM2lOWOiM2v)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 ---
 
