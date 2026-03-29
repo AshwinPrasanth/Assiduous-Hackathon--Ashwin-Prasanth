@@ -4,6 +4,8 @@
 
 **Built for the Assiduous Hackathon · March 2026**
 
+[![Deployed Ewbsite](https://img.shields.io/badge/Website-Experience%20website%20here-red)](https://thefinproject.vercel.app/)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 ---
 
 ## What It Does
