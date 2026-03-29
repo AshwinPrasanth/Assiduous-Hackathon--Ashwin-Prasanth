@@ -17,6 +17,7 @@ from langgraph.graph import END, StateGraph
 
 from agents.financial_model_agent import run_financial_model
 from agents.report_agent import run_report_agent
+from agents.brand_agent import run_brand_agent
 from models.financial import (
     NormalisedFinancials,
     PipelineState,
@@ -119,6 +120,37 @@ async def node_validate(state: dict) -> dict:
         return {"logs": logs, "errors": [msg], "status": "failed"}
 
 
+async def node_brand(state: dict) -> dict:
+    """
+    Brand & Positioning node — scrapes IR page, 10-K MD&A, and news.
+    Populates the per-ticker vector store for RAG in the report agent.
+    Runs in parallel-ish with transform/validate; non-blocking on failure.
+    """
+    logs = state.get("logs", [])
+    financials: NormalisedFinancials = state.get("raw_financials")
+    if not financials:
+        return {"logs": logs}
+
+    ticker = financials.ticker
+    logs.append(f"[brand] Scraping IR page, 10-K MD&A, and news for {ticker}...")
+    try:
+        results = await run_brand_agent(
+            ticker=ticker,
+            company_name=financials.profile.name,
+            website=financials.profile.website or "",
+        )
+        logs.append(
+            f"[brand] ✓ {results['ir_chunks']} IR chunks, "
+            f"{results['mda_chunks']} MD&A chunks, "
+            f"{results['news_items']} news items indexed"
+        )
+    except Exception as exc:
+        # Brand agent failure is non-fatal — report proceeds without RAG context
+        logs.append(f"[brand] ⚠ Scraping partial ({exc}) — report will use financial data only")
+        logger.warning("brand_agent_failed", ticker=ticker, error=str(exc))
+    return {"logs": logs, "raw_financials": financials}
+
+
 async def node_model(state: dict) -> dict:
     logs = state.get("logs", [])
     financials: NormalisedFinancials = state["raw_financials"]
@@ -126,31 +158,28 @@ async def node_model(state: dict) -> dict:
     
     logger.info("node_enter", node="model", ticker=ticker)
     
-    # --- CRITICAL GUARD CLAUSE ---
-    # If Yahoo failed, these lists are empty. We must skip the DCF math 
-    # to prevent "list index out of range" and move straight to the AI report.
-    if not financials.balance_sheets or not financials.cash_flows:
-        msg = "[model] ⚠ Skipping DCF math: Supplemental statement data (Yahoo) was unavailable."
-        logs.append(msg)
-        logger.warning("model_skipped_insufficient_data", ticker=ticker)
-        # We return "None" for the model, but keep status "running" so the report node starts
-        return {
-            "financial_model": None, 
-            "logs": logs, 
-            "status": "running",
-            "raw_financials": financials # Keep passing financials forward
-        }
-
-    logs.append("[model] Building 3-scenario DCF model...")
+    # Ingest now guarantees balance sheets and cash flows via 3-tier fallback
+    # (Yahoo → EDGAR XBRL → Synthesized). DCF always runs.
+    bs_count = len(financials.balance_sheets)
+    cf_count = len(financials.cash_flows)
+    logs.append(f"[model] Building 3-scenario DCF model ({bs_count} BS periods, {cf_count} CF periods)...")
     try:
         # This is where the index error used to happen inside run_financial_model
         fin_model = await run_financial_model(financials)
-        
-        base = fin_model.scenarios["base"]
-        logs.append(
-            f"[model] ✓ Base case: ${base.price_per_share:.2f}/share "
-            f"({base.upside_downside_pct:+.1%} vs current ${base.current_price:.2f})"
+
+        # scenarios is dict[Scenario, DCFValuation] — keys are enum objects.
+        # Look up by value string to avoid KeyError from "base" vs Scenario.BASE.
+        base = next(
+            (v for k, v in fin_model.scenarios.items() if str(k).split(".")[-1].lower().strip("'. ") == "base"),
+            None
         )
+        if base:
+            logs.append(
+                f"[model] ✓ Base case: ${base.price_per_share:.2f}/share "
+                f"({base.upside_downside_pct:+.1%} vs current ${base.current_price:.2f})"
+            )
+        else:
+            logs.append("[model] ✓ DCF complete (base scenario key not found for log)")
         logger.info("node_exit", node="model", status="ok")
         return {
             "financial_model": fin_model, 
@@ -187,7 +216,7 @@ async def node_report(state: dict) -> dict:
         
         logs.append("[report] ✓ Equity brief generated")
         logger.info("node_exit", node="report", status="ok")
-        return {"equity_brief": brief, "logs": logs, "status": "complete"}
+        return {"equity_brief": brief, "financial_model": fin_model, "logs": logs, "status": "complete"}
     except Exception as exc:
         # If the report agent is hardcoded to EXPECT scenarios, 
         # this catch block will see the 'NoneType' error.
@@ -215,15 +244,16 @@ def build_graph() -> Any:
     workflow.add_node("ingest", node_ingest)
     workflow.add_node("transform", node_transform)
     workflow.add_node("validate", node_validate)
+    workflow.add_node("brand", node_brand)
     workflow.add_node("model", node_model)
     workflow.add_node("report", node_report)
 
     workflow.set_entry_point("ingest")
 
-    # Each step checks for failure before proceeding
     workflow.add_conditional_edges("ingest", should_continue, {"continue": "transform", "end": END})
     workflow.add_conditional_edges("transform", should_continue, {"continue": "validate", "end": END})
-    workflow.add_conditional_edges("validate", should_continue, {"continue": "model", "end": END})
+    workflow.add_conditional_edges("validate", should_continue, {"continue": "brand", "end": END})
+    workflow.add_edge("brand", "model")  # brand never hard-fails
     workflow.add_conditional_edges("model", should_continue, {"continue": "report", "end": END})
     workflow.add_edge("report", END)
 

@@ -22,9 +22,10 @@ from models.financial import (
     NormalisedFinancials,
     RiskFactor,
     Scenario,
-    DCFValuation, # Corrected from ScenarioResult
-    ScenarioAssumptions # Added for the placeholder constructor
+    DCFValuation,
+    ScenarioAssumptions
 )
+from agents.brand_agent import retrieve_brand_context
 
 logger = structlog.get_logger(__name__)
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY") or "gsk_YOUR_ACTUAL_KEY_HERE"
@@ -164,22 +165,31 @@ def _step_writer(
         "You are an experienced equity research writer. Always label speculative statements as [ESTIMATE]. "
         "Do not present projections as facts. Return only a JSON object."
     )
+
+    # Pull brand/IR/news context from the vector store (RAG)
+    brand_context = retrieve_brand_context(
+        financials.ticker,
+        query=f"{financials.profile.name} business model revenue growth competitive advantage strategy",
+        k=4,
+    )
+    brand_section = f"\n\nBrand & Positioning Context (from IR page, 10-K MD&A, news):\n{brand_context}" if brand_context else ""
+
     user = f"""Write the following sections for {financials.profile.name}.
 
 Data summary:
-{summary}
+{summary}{brand_section}
 
 Analyst insights:
 {json.dumps(insights, indent=2)}
 
 Return a JSON object with these exact keys:
-- "executive_summary": 3-4 sentences TL;DR
-- "brand_and_positioning": 2-3 sentences on competitive moat
-- "financial_highlights": 3-4 sentences on revenue/margins
-- "valuation_summary": 2-3 sentences on valuation (cite DCF if available, otherwise trend-based)
-- "investment_recommendation": 1 balanced paragraph
+- "executive_summary": 3-4 sentences TL;DR with specific numbers
+- "brand_and_positioning": 2-3 sentences on competitive moat, market position, and key products/segments (use the brand context above if available)
+- "financial_highlights": 3-4 sentences on revenue/margins with actual figures
+- "valuation_summary": 2-3 sentences on valuation (cite DCF implied price and upside/downside if available)
+- "investment_recommendation": 1 balanced paragraph with a clear stance and key catalysts/risks
 
-Be specific, cite numbers, and flag estimates.
+Be specific, cite numbers, and flag estimates as [ESTIMATE].
 """
     raw = _call_llm(system, user, max_tokens=1400)
     try:
