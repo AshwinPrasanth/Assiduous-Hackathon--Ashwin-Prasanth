@@ -216,6 +216,21 @@ WACC  7.5%  $XXX   $XXX   $XXX   $XXX   $XXX
 35 valuations. Pure Python. Zero additional LLM calls.
 ```
 
+### Example Outputs
+
+#### IBM — BUY
+![IBM](OUTPUTS/IBM_Results/IBM2.png)
+
+### Apple — SELL
+![Apple](OUTPUTS/APPLE_Results/Apple1.png)
+
+### DCF Sensitivity Analysis
+![DCF](OUTPUTS/IBM_Results/IBM3.png)
+
+### Research Note
+![Research Note](OUTPUTS/IBM_Results/IBM4.png)
+
+
 ### LLM Assumptions — anchored to historical data
 
 The LLM receives:
