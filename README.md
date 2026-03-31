@@ -218,6 +218,9 @@ WACC  7.5%  $XXX   $XXX   $XXX   $XXX   $XXX
 
 ### Example Outputs
 
+#### Backend Transparent Engine — Built in UI
+![IBM](OUTPUTS/IBM_Results/IBM1.png)
+
 #### IBM — BUY
 ![IBM](OUTPUTS/IBM_Results/IBM2.png)
 
