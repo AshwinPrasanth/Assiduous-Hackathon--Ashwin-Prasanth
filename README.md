@@ -227,6 +227,9 @@ WACC  7.5%  $XXX   $XXX   $XXX   $XXX   $XXX
 ### Apple — SELL
 ![Apple](OUTPUTS/APPLE_Results/Apple1.png)
 
+### Apple — Correctly Identifying the risk
+![Apple](OUTPUTS/APPLE_Results/Apple4.png)
+
 ### DCF Sensitivity Analysis
 ![DCF](OUTPUTS/IBM_Results/IBM3.png)
 
